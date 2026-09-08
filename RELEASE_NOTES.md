@@ -1,3 +1,9 @@
+# Restore gateway port telemetry compatibility
+
+- Restore gateway's variable-header port push decoding. Port telemetry must not pass through the settings Result parser or a 16/17-byte frame-length filter.
+- Retain hardware protocol decoding, existing configuration and entity IDs.
+- Add regressions for varying port headers and verify raw port frames reach real HA voltage/current/power entities.
+
 # HA Bluetooth only
 
 - Adopt the HA-routed Bluetooth implementation from gateway/main (`734bbce`).

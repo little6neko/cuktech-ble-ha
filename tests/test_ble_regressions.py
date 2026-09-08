@@ -346,3 +346,35 @@ async def test_explicit_all_ports_command_does_not_require_old_bitmask(runtime):
     await runtime.async_port_control("all", "off")
     runtime._controller.send_miot_command.assert_awaited_once_with(2, 16, 0)
     assert runtime.state.settings["16"] == 0
+
+
+@pytest.mark.parametrize("header_size", [9, 10, 11, 12, 13, 14, 15])
+@pytest.mark.asyncio
+async def test_gateway_port_push_headers_do_not_require_setting_result_layout(runtime, header_size):
+    # Gateway accepts port pushes by PIID and decodes the trailing four bytes.
+    # Their header must not be interpreted as a GET Result status/length/type.
+    header = bytearray([0x55] * header_size)
+    header[4] = 4
+    header[6] = 2
+    header[7:9] = (1).to_bytes(2, "little")
+    runtime._process_push(bytes(header) + bytes([1, 4, 20, 90]))
+    assert runtime.state.ports[1].voltage == 9.0
+    assert runtime.state.ports[1].current == 2.0
+    assert runtime.state.ports[1].power == 18.0
+    assert runtime._last_payload > 0
+
+
+@pytest.mark.asyncio
+async def test_gateway_port_push_updates_power_and_keeps_hardware_protocol(runtime):
+    runtime.state.update_setting(17, 0x0A640850)
+    header = bytes([15, 32, 1, 0, 4, 1, 2, 1, 0, 4, 80])
+    runtime._process_push(header + bytes([1, 4, 20, 90]))
+    assert runtime.state.ports[1].power == 18.0
+    assert runtime.state.ports[1].protocol == "UFCS"
+
+
+@pytest.mark.asyncio
+async def test_short_port_push_does_not_reset_silence_watchdog(runtime):
+    runtime._process_push(bytes([9, 32, 1, 0, 4, 1, 2, 1, 0]))
+    assert runtime.state.ports[1].power == 0
+    assert runtime._last_payload == 0

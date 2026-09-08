@@ -350,18 +350,26 @@ class CuktechBLERuntime:
             )
 
     def _process_push(self, payload: bytes) -> None:
-        if len(payload) < 9 or payload[4] != 0x04 or payload[6] != SIID_CHARGER:
+        if len(payload) < 9 or payload[4] != 0x04:
             return
         piid = int.from_bytes(payload[7:9], "little")
+        if piid in PORT_NAMES:
+            # Preserve gateway's port telemetry format: the final four bytes
+            # contain status/code/current/voltage. Port push headers are not
+            # GET Result headers and vary between firmware versions.
+            if len(payload) < 12:
+                return
+            self.state.update_port(piid, payload)
+            self._last_payload = asyncio.get_running_loop().time()
+            return
+        if payload[6] != SIID_CHARGER or piid not in READABLE_SETTINGS_PIIDS:
+            return
         value = parse_property_value(payload)
         if value is None:
+            _LOGGER.debug("Ignored unsupported setting push: PIID %d, %d bytes", piid, len(payload))
             return
         self._last_payload = asyncio.get_running_loop().time()
-        if piid in PORT_NAMES:
-            if len(payload) in (16, 17):
-                self.state.update_port(piid, payload)
-        elif piid in READABLE_SETTINGS_PIIDS:
-            self.state.update_setting(piid, value)
+        self.state.update_setting(piid, value)
 
     def _require_controller(self) -> CuktechBLEController:
         controller = self._controller

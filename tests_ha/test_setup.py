@@ -73,22 +73,20 @@ async def test_real_ha_setup_entities_updates_and_unload(tmp_path, shutdown):
             states = hass.states.async_all()
             # 17 sensors, 18 switches, 5 binary sensors, 3 selects, 4 numbers.
             assert len(states) == 47
-            await coordinator._async_handle_snapshot(
-                {
-                    "connected": True,
-                    "authenticated": True,
-                    "ports": {
-                        "c1": {
-                            "power": 9.0,
-                            "voltage": 9.0,
-                            "current": 1.0,
-                            "protocol": "UFCS",
-                            "active": True,
-                        }
-                    },
-                    "settings": {"6": 5, "16": 15, "21": 0x03030F0F},
-                }
-            )
+            # Exercise the incoming-frame parser before HA state publication,
+            # rather than injecting an already-decoded coordinator snapshot.
+            runtime = coordinator._runtime
+            runtime.state.connected = runtime.state.authenticated = True
+            for piid, value in ((6, 5), (16, 15), (21, 0x03030F0F), (17, 0x0A640850)):
+                runtime.state.update_setting(piid, value)
+            runtime._process_push(bytes([15, 32, 1, 0, 4, 1, 2, 1, 0, 4, 80, 1, 4, 20, 90]))
+            await runtime._emit_snapshot()
+            registry = entity_registry.async_get(hass)
+            for suffix, expected in (("power", "18.0"), ("voltage", "9.0"), ("current", "2.0")):
+                entity_id = registry.async_get_entity_id(
+                    "sensor", DOMAIN, f"{entry.entry_id}_port_1_{suffix}"
+                )
+                assert hass.states.get(entity_id).state == expected
             assert any(state.state == "UFCS" for state in hass.states.async_all("sensor"))
             assert any(state.state == "1分钟" for state in hass.states.async_all("select"))
             task = coordinator._runtime._run_task

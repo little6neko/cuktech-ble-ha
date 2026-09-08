@@ -68,7 +68,7 @@ python -m pytest
 ruff check custom_components tests tests_ha
 ```
 
-真实 HA 加载测试使用独立 Python 环境，避免单元测试的 HA 模拟模块影响结果；运行方式见 `.github/workflows/tests.yml`。
+真实 HA 加载测试位于 `tests_ha/`。在独立 Python 3.13 环境中安装 Home Assistant 2025.1.4 及其 Bluetooth/USB 依赖后，单独运行 `python -m pytest tests_ha`，避免单元测试的 HA 模拟模块影响结果。本仓库不配置 GitHub Actions 自动检查。
 
 移植来源与验证范围见 [直连移植说明](docs/direct-bluetooth.md)。
 

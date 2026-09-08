@@ -39,4 +39,4 @@
 
 `tests_ha/` 在独立环境使用真实 Home Assistant 类验证配置流程、实体平台、后台任务与卸载。蓝牙连接本身仍需真实充电器、本机适配器或代理进行验收；这些测试不代表已完成实机验证。
 
-本次本地验证：Python 3.11 / 3.13 各通过 120 项单元测试；Home Assistant 2025.1.4（使用该版本声明的 Bluetooth/USB 依赖）通过 3 项真实 HA 测试，覆盖 47 个实体加载/更新、卸载、关机和配置表单；Ruff、JSON 校验与 Python 打包检查通过。未连接真实充电器，也未执行 GitHub 托管的 HACS/Hassfest 工作流。
+本次本地验证：Python 3.11 / 3.13 各通过 120 项单元测试；Home Assistant 2025.1.4（使用该版本声明的 Bluetooth/USB 依赖）通过 3 项真实 HA 测试，覆盖 47 个实体加载/更新、卸载、关机和配置表单；Ruff、JSON 校验与 Python 打包检查通过。未连接真实充电器。GitHub Actions 自动检查已按使用需求移除，本地测试保留。

@@ -1,0 +1,245 @@
+"""Switch platform for CUKTECH Charger."""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from . import CuktechBluetoothCoordinator
+from .base_entity import CuktechBaseEntity
+from .const import DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
+
+# 各端口支持的协议开关定义
+PROTOCOL_SWITCHES = [
+    ("c1", "pd", "C1 PD"),
+    ("c1", "pps", "C1 PPS"),
+    ("c1", "ufcs", "C1 UFCS"),
+    ("c2", "pd", "C2 PD"),
+    ("c2", "pps", "C2 PPS"),
+    ("c2", "ufcs", "C2 UFCS"),
+    ("c3", "ufcs", "C3 UFCS"),
+    ("c3", "scp", "C3 SCP"),
+    ("a", "ufcs", "USB-A UFCS"),
+    ("a", "scp", "USB-A SCP"),
+]
+
+SETTING_PIIDS = {
+    15: {"name": "USB-A小电流", "icon": "mdi:usb-port"},
+    19: {"name": "空闲息屏", "icon": "mdi:monitor-off"},
+    20: {"name": "屏幕方向锁", "icon": "mdi:screen-rotation-lock"},
+}
+
+PORT_SWITCHES = {
+    "c1": {"name": "C1 端口", "icon": "mdi:usb-c-port", "bit": 0},
+    "c2": {"name": "C2 端口", "icon": "mdi:usb-c-port", "bit": 1},
+    "c3": {"name": "C3 端口", "icon": "mdi:usb-c-port", "bit": 2},
+    "a": {"name": "USB-A 端口", "icon": "mdi:usb-port", "bit": 3},
+}
+
+
+async def async_setup_entry(
+    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+) -> None:
+    """Set up CUKTECH Charger switches from a config entry."""
+    coord = hass.data[DOMAIN][entry.entry_id]
+    entities = [CuktechConnectionSwitch(coord, entry)]
+
+    for piid, cfg in SETTING_PIIDS.items():
+        entities.append(CuktechSettingSwitch(coord, entry, piid, cfg["name"], cfg["icon"]))
+
+    for port, cfg in PORT_SWITCHES.items():
+        entities.append(CuktechPortSwitch(coord, entry, port, cfg["name"], cfg["icon"], cfg["bit"]))
+
+    for port, proto, name in PROTOCOL_SWITCHES:
+        entities.append(CuktechProtocolSwitch(coord, entry, port, proto, name))
+
+    async_add_entities(entities)
+
+
+class CuktechConnectionSwitch(CuktechBaseEntity, SwitchEntity):
+    """Switch to control BLE connection (enable/disable)."""
+
+    _attr_has_entity_name = True
+    _attr_name = "连接控制"
+    _attr_icon = "mdi:bluetooth-connect"
+
+    def __init__(self, coord: CuktechBluetoothCoordinator, entry: ConfigEntry) -> None:
+        """Initialize the switch."""
+        super().__init__(coord, entry)
+        self._attr_unique_id = f"{entry.entry_id}_ble_control"
+
+    @property
+    def available(self) -> bool:
+        """Keep the control available so a stopped connection can be restarted."""
+        return not self.coordinator.ble_pending
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return extra state attributes for frontend display."""
+        return {"pending": self.coordinator.ble_pending}
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return True if BLE connection is enabled."""
+        return self.coordinator.ble_enabled
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Enable BLE connection."""
+        await self.coordinator.async_enable_ble(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Disable BLE connection."""
+        await self.coordinator.async_enable_ble(False)
+
+
+class CuktechSettingSwitch(CuktechBaseEntity, SwitchEntity):
+    """Switch for CUKTECH Charger settings."""
+
+    _attr_has_entity_name = True
+    _attr_device_class = SwitchDeviceClass.SWITCH
+
+    def __init__(
+        self,
+        coord: CuktechBluetoothCoordinator,
+        entry: ConfigEntry,
+        piid: int,
+        name: str,
+        icon: str,
+    ) -> None:
+        """Initialize the switch."""
+        super().__init__(coord, entry)
+        self._piid = piid
+        self._attr_unique_id = f"{entry.entry_id}_switch_{piid}"
+        self._attr_name = name
+        self._attr_icon = icon
+
+    @property
+    def available(self) -> bool:
+        """Return True if entity is available."""
+        return self.coordinator.available
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return True if entity is on."""
+        if not self.coordinator.data:
+            return None
+        v = self.coordinator.data.get(str(self._piid))
+        try:
+            return bool(int(v)) if v is not None else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn the entity on."""
+        await self.coordinator.async_set_value(self._piid, 1)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn the entity off."""
+        await self.coordinator.async_set_value(self._piid, 0)
+
+
+class CuktechPortSwitch(CuktechBaseEntity, SwitchEntity):
+    """Switch for CUKTECH Charger ports."""
+
+    _attr_has_entity_name = True
+    _attr_device_class = SwitchDeviceClass.OUTLET
+
+    def __init__(
+        self,
+        coord: CuktechBluetoothCoordinator,
+        entry: ConfigEntry,
+        port: str,
+        name: str,
+        icon: str,
+        bit: int,
+    ) -> None:
+        """Initialize the switch."""
+        super().__init__(coord, entry)
+        self._port = port
+        self._bit = bit
+        self._attr_unique_id = f"{entry.entry_id}_port_switch_{port}"
+        self._attr_name = name
+        self._attr_icon = icon
+
+    @property
+    def available(self) -> bool:
+        """Return True if entity is available."""
+        return self.coordinator.available
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return True if entity is on."""
+        if not self.coordinator.data:
+            return None
+        port_ctl = self.coordinator.data.get("16")
+        if port_ctl is None:
+            return None
+        try:
+            return bool(int(port_ctl) & (1 << self._bit))
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn the entity on."""
+        await self.coordinator.async_port_control(self._port, "on")
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn the entity off."""
+        await self.coordinator.async_port_control(self._port, "off")
+
+
+class CuktechProtocolSwitch(CuktechBaseEntity, SwitchEntity):
+    """Switch for individual protocol on a CUKTECH Charger port (PIID 21)."""
+
+    _attr_has_entity_name = True
+    _attr_device_class = SwitchDeviceClass.SWITCH
+
+    def __init__(
+        self,
+        coord: CuktechBluetoothCoordinator,
+        entry: ConfigEntry,
+        port: str,
+        protocol: str,
+        name: str,
+    ) -> None:
+        """Initialize the protocol switch."""
+        super().__init__(coord, entry)
+        self._port = port
+        self._protocol = protocol
+        self._attr_unique_id = f"{entry.entry_id}_protocol_{port}_{protocol}"
+        self._attr_name = name
+        self._attr_icon = "mdi:power-plug-outline"
+
+    @property
+    def available(self) -> bool:
+        """Return True if entity is available."""
+        return self.coordinator.available
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return True if the protocol switch is on.
+
+        对于 C1/C2 的 PPS，同时检查 PD 状态：PD 关闭时 PPS 视为关闭。
+        """
+        switches = self.coordinator.protocol_switches
+        port_data = switches.get(self._port)
+        if port_data is None:
+            return None
+        if self._protocol == "pps" and port_data.get("pd") is False:
+            return False
+        return port_data.get(self._protocol)
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn the protocol switch on."""
+        await self.coordinator.async_set_protocol(self._port, self._protocol, True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn the protocol switch off."""
+        await self.coordinator.async_set_protocol(self._port, self._protocol, False)

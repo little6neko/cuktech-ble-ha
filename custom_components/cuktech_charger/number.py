@@ -1,0 +1,83 @@
+"""Number platform for CUKTECH Charger."""
+
+from __future__ import annotations
+
+import logging
+
+from homeassistant.components.number import NumberEntity, NumberMode
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+from . import CuktechBluetoothCoordinator
+from .base_entity import CuktechBaseEntity
+from .const import DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
+
+COUNTDOWN_PIIDS = {
+    9: {"name": "C1 倒计时", "icon": "mdi:timer-cog-outline"},
+    10: {"name": "C2 倒计时", "icon": "mdi:timer-cog-outline"},
+    11: {"name": "C3 倒计时", "icon": "mdi:timer-cog-outline"},
+    12: {"name": "USB-A 倒计时", "icon": "mdi:timer-cog-outline"},
+}
+
+
+async def async_setup_entry(
+    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+) -> None:
+    """Set up CUKTECH Charger countdown timers from a config entry."""
+    coord = hass.data[DOMAIN][entry.entry_id]
+    entities = [
+        CuktechCountdown(coord, entry, piid, cfg["name"], cfg["icon"])
+        for piid, cfg in COUNTDOWN_PIIDS.items()
+    ]
+    async_add_entities(entities)
+
+
+class CuktechCountdown(CuktechBaseEntity, NumberEntity):
+    """Number entity for CUKTECH Charger countdown timers."""
+
+    _attr_has_entity_name = True
+    _attr_native_min_value = 0
+    _attr_native_max_value = 1440
+    _attr_native_step = 1
+    _attr_native_unit_of_measurement = "min"
+    _attr_mode = NumberMode.BOX
+
+    def __init__(
+        self,
+        coord: CuktechBluetoothCoordinator,
+        entry: ConfigEntry,
+        piid: int,
+        name: str,
+        icon: str,
+    ) -> None:
+        """Initialize the number entity."""
+        super().__init__(coord, entry)
+        self._piid = piid
+        self._attr_unique_id = f"{entry.entry_id}_countdown_{piid}"
+        self._attr_name = name
+        self._attr_icon = icon
+
+    @property
+    def available(self) -> bool:
+        """Return True if entity is available."""
+        return self.coordinator.available
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the countdown value."""
+        if not self.coordinator.data:
+            return None
+        v = self.coordinator.data.get(str(self._piid))
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (ValueError, TypeError):
+            return None
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Set the countdown value."""
+        await self.coordinator.async_set_value(self._piid, value)

@@ -1,0 +1,42 @@
+name: Tests
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e '.[dev]'
+      - run: python -m pytest tests
+      - run: ruff check custom_components tests tests_ha
+  home-assistant:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install 'homeassistant==2025.1.4' pytest pytest-asyncio
+      - name: Install HA Bluetooth and USB dependencies
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import homeassistant
+          root = Path(homeassistant.__file__).parent / 'components'
+          requirements = []
+          for domain in ('bluetooth', 'usb'):
+              requirements.extend(json.loads((root / domain / 'manifest.json').read_text())['requirements'])
+          Path('/tmp/ha-bluetooth-requirements.txt').write_text('\n'.join(requirements) + '\n')
+          PY
+          pip install -r /tmp/ha-bluetooth-requirements.txt
+      - run: python -m pytest tests_ha

@@ -1,0 +1,23 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "CUKTECH Charger",
+        "description": "Connect directly through Home Assistant Bluetooth. The token is 24 hexadecimal characters; BLE key is optional and is 32 hexadecimal characters.",
+        "data": {
+          "name": "Device name",
+          "mac": "Bluetooth MAC address",
+          "token": "Token",
+          "ble_key": "BLE key (optional)"
+        }
+      }
+    },
+    "error": {
+      "invalid_mac": "Enter a valid Bluetooth MAC address",
+      "invalid_credentials": "Check the token and BLE key lengths and hexadecimal format"
+    },
+    "abort": {
+      "already_configured": "Device is already configured"
+    }
+  }
+}

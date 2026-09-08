@@ -1,0 +1,23 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "CUKTECH 充电器",
+        "description": "通过 Home Assistant 的统一蓝牙服务直接连接。Token 为 24 位十六进制字符；BLE Key 可留空，填写时为 32 位十六进制字符。",
+        "data": {
+          "name": "设备名称",
+          "mac": "蓝牙 MAC 地址",
+          "token": "Token",
+          "ble_key": "BLE Key（可选）"
+        }
+      }
+    },
+    "error": {
+      "invalid_mac": "请输入有效的蓝牙 MAC 地址",
+      "invalid_credentials": "请检查 Token 和 BLE Key 的长度及十六进制格式"
+    },
+    "abort": {
+      "already_configured": "该设备已配置"
+    }
+  }
+}

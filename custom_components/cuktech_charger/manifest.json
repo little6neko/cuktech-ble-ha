@@ -1,0 +1,17 @@
+{
+  "domain": "cuktech_charger",
+  "name": "CUKTECH Charger",
+  "codeowners": [
+    "@little6neko"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "bluetooth_adapters"
+  ],
+  "documentation": "https://github.com/little6neko/cuktech-ble-ha",
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/little6neko/cuktech-ble-ha/issues",
+  "requirements": [],
+  "version": "1.1.0"
+}

@@ -45,13 +45,7 @@ Thumbs.db
 *.db-shm
 *.db-wal
 
-# BLE Server specific
-cuktech-ble-server/.venv/
-cuktech-ble-server/__pycache__/
-cuktech-ble-server/src/cuktech_ble/__pycache__/
-ble_server/data/
-ble_server/tools/
-ble_server/spec_cli.py
+# Local protocol research
 docs/frida
 docs/hci_log
 docs/dex
@@ -68,7 +62,6 @@ docs/async.md
 docs/research
 docs/plans
 
-
 # Environment variables
 .env
 *.env
@@ -79,11 +72,11 @@ config.yaml
 !config.yaml.example
 
 # HA specific
-ha_config/.storage/
-ha_config/.cache/
-ha_config/.storage/core.entity_registry
-ha_config/.storage/core.device_registry
-ha_config/.storage/core.config_entries
+**/.storage/
+**/.cache/
+**/.storage/core.entity_registry
+**/.storage/core.device_registry
+**/.storage/core.config_entries
 
 # Temporary files
 *.tmp
@@ -97,7 +90,5 @@ sync.sh
 .log_level
 baksmali.jar
 
-esp32_ble/.github/
-esp32_ble/sdkconfig
-esp32_ble/sdkconfig.old
-esp32_ble/main/embedded_files.h
+.pytest_cache/
+.ruff_cache/

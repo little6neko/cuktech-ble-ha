@@ -10,6 +10,7 @@ from typing import Any
 
 from bleak import BleakClient
 from bleak.backends.device import BLEDevice
+from bleak.exc import BleakError
 from bleak_retry_connector import establish_connection
 from homeassistant.components.bluetooth import async_ble_device_from_address
 from homeassistant.core import HomeAssistant
@@ -29,6 +30,11 @@ from .const import PROTOCOL_BITS
 from .protocol_codec import encode_protocol_switches
 
 _LOGGER = logging.getLogger(__name__)
+
+_PORT_POLL_INTERVAL = 3.0
+_PORT_POLL_TIMEOUT = 3.0
+_BACKGROUND_COMMAND_TIMEOUT = 15.0
+_CONSECUTIVE_FAILURE_LIMIT = 5
 
 SnapshotCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
 
@@ -66,6 +72,9 @@ class CuktechBLERuntime:
         self._command_lock = asyncio.Lock()
         self._last_payload = 0.0
         self._last_probe = 0.0
+        self._next_port_poll = {3: 0.0, 4: 0.0}
+        self._port_poll_failures = 0
+        self._command_failures = 0
 
     @property
     def running(self) -> bool:
@@ -125,6 +134,8 @@ class CuktechBLERuntime:
             raise ValueError(f"Value outside allowed range for PIID {piid}")
 
         async def send(controller: CuktechBLEController) -> dict[str, Any]:
+            if piid == 16:
+                return await self._set_port_mask(controller, value)
             result = await controller.send_miot_command(SIID_CHARGER, piid, value)
             if result is None:
                 raise ConnectionError(f"No response while setting PIID {piid}")
@@ -145,22 +156,51 @@ class CuktechBLERuntime:
 
         async def control(controller: CuktechBLEController) -> int:
             if port == "all":
-                await controller.drain_command_notifications()
-                current_value = self.state.settings.get("16")
-                new_value = 0x0F if action == "on" else 0
+                new_mask = 0x0F if action == "on" else 0
             else:
-                current_value = await self._known_setting(controller, 16)
-                mask = 1 << PORT_BITS[port]
-                new_value = current_value | mask if action == "on" else current_value & ~mask
-            if new_value != current_value:
-                result = await controller.send_miot_command(SIID_CHARGER, 16, new_value)
-                if result is None:
-                    raise ConnectionError("No response while setting port control")
-            self.state.update_setting(16, new_value)
-            return new_value
+                live_mask = await self._read_port_mask(controller)
+                current_mask = live_mask if live_mask is not None else self.state.settings.get("16")
+                if current_mask is None or not 0 <= current_mask <= 0xFF:
+                    raise ConnectionError("Cannot change unknown PIID 16 bitmask")
+                bit = 1 << PORT_BITS[port]
+                new_mask = current_mask | bit if action == "on" else current_mask & ~bit
+                if new_mask == live_mask:
+                    return live_mask
+            result = await self._set_port_mask(controller, new_mask)
+            return result["value"]
 
-        new_value = await self._execute_when_ready(control, f"turn port {port} {action}")
-        return new_value
+        return await self._execute_when_ready(control, f"turn port {port} {action}")
+
+    async def _read_port_mask(self, controller: CuktechBLEController) -> int | None:
+        try:
+            result = await controller.send_miot_command(
+                SIID_CHARGER, 16, timeout=_PORT_POLL_TIMEOUT
+            )
+        except (OSError, BleakError):
+            if self._disconnected_event.is_set() or not controller.client.is_connected:
+                raise
+            _LOGGER.debug("Unable to read the device's port mask", exc_info=True)
+            return None
+        value = None if result is None else result.get("value")
+        if not isinstance(value, int) or not 0 <= value <= 0xFF:
+            return None
+        self.state.update_setting(16, value)
+        return value
+
+    async def _set_port_mask(self, controller: CuktechBLEController, mask: int) -> dict[str, Any]:
+        result = await controller.send_miot_command(SIID_CHARGER, 16, mask)
+        if result is None:
+            raise ConnectionError("No response while setting port control")
+        effective = result.get("value")
+        if result.get("transport_only"):
+            # Gateway firmware can acknowledge transport without replying to
+            # SET. Prefer a device read-back and retain the existing fallback
+            # for firmware that also fails to answer GET.
+            effective = await self._read_port_mask(controller)
+        if not isinstance(effective, int) or not 0 <= effective <= 0xFF:
+            effective = mask
+        self.state.update_setting(16, effective)
+        return {**result, "value": effective}
 
     async def _known_setting(self, controller: CuktechBLEController, piid: int) -> int:
         # Reconcile queued device-side changes before computing a new bitmask.
@@ -202,13 +242,26 @@ class CuktechBLERuntime:
                 "Charger did not become connected and authenticated in time"
             ) from err
         async with self._command_lock:
+            controller = self._require_controller()
             try:
                 async with asyncio.timeout(30):
-                    return await operation(self._require_controller())
+                    result = await operation(controller)
             except TimeoutError as err:
                 self._ready_event.clear()
                 self._disconnected_event.set()
                 raise ConnectionError(f"Timed out while trying to {description}") from err
+            except (OSError, BleakError):
+                self._command_failures += 1
+                if self._command_failures >= _CONSECUTIVE_FAILURE_LIMIT:
+                    _LOGGER.warning(
+                        "Repeated BLE command failures for %s; reconnecting", self.address
+                    )
+                    self._ready_event.clear()
+                    self._disconnected_event.set()
+                raise
+            else:
+                self._command_failures = 0
+                return result
             finally:
                 # Commands can consume unsolicited pushes, even when they fail.
                 await self._emit_snapshot()
@@ -252,6 +305,8 @@ class CuktechBLERuntime:
 
     async def _connect_and_consume(self) -> None:
         self.state = ChargerState()
+        self._command_failures = self._port_poll_failures = 0
+        self._next_port_poll = {3: 0.0, 4: 0.0}
         self._ready_event.clear()
         device = async_ble_device_from_address(self.hass, self.address, connectable=True)
         if device is None:
@@ -291,13 +346,72 @@ class CuktechBLERuntime:
                 if payload is not None:
                     self._process_push(payload)
                 controller.drain_spec_notifications()
-                await self._probe_if_silent(controller)
-            if payload is not None:
+                polled = False
+                if not self._disconnected_event.is_set():
+                    polled = await self._poll_next_port(controller)
+                    await self._probe_if_silent(controller)
+            if payload is not None or polled:
                 await self._emit_snapshot()
             elif self._disconnected_event.is_set():
                 break
         if not self._stop_event.is_set():
             raise ConnectionError("BLE device disconnected")
+
+    async def _poll_next_port(self, controller: CuktechBLEController) -> bool:
+        """Check one due port while holding the same lock as entity commands."""
+        loop = asyncio.get_running_loop()
+        piid = min(self._next_port_poll, key=self._next_port_poll.__getitem__)
+        if loop.time() < self._next_port_poll[piid]:
+            return False
+        try:
+            async with asyncio.timeout(_BACKGROUND_COMMAND_TIMEOUT):
+                result = await controller.send_miot_command(
+                    SIID_CHARGER, piid, timeout=_PORT_POLL_TIMEOUT
+                )
+        except TimeoutError as err:
+            # A cancelled transport exchange may leave the device waiting for an ACK.
+            raise ConnectionError(f"Reading port PIID {piid} timed out") from err
+        except (OSError, BleakError):
+            if self._disconnected_event.is_set() or not controller.client.is_connected:
+                raise
+            result = None
+            _LOGGER.debug("Unable to read port PIID %d", piid, exc_info=True)
+        self._next_port_poll[piid] = loop.time() + _PORT_POLL_INTERVAL
+
+        payload = None if result is None else result.get("raw")
+        # GET results have a four-byte value with an explicit length. A
+        # matching port push may also arrive and has already been forwarded.
+        if payload is not None and (
+            (
+                len(payload) == 17
+                and payload[4] == 0x03
+                and payload[11] == 4
+                and result.get("value") is not None
+            )
+            or (len(payload) >= 12 and payload[4] == 0x04)
+        ):
+            self.state.update_port(piid, payload)
+            self._last_payload = loop.time()
+            self._port_poll_failures = 0
+        else:
+            self._port_poll_failures += 1
+            if self._port_poll_failures >= _CONSECUTIVE_FAILURE_LIMIT:
+                # Missing port telemetry alone can be a firmware limitation.
+                # Check a separate property before reconnecting the device.
+                await self._probe_miot_session(controller, "consecutive port reads failed")
+                self._port_poll_failures = 0
+        # A GET may consume C1/C2 pushes even if no result arrived.
+        return True
+
+    async def _probe_miot_session(self, controller: CuktechBLEController, reason: str) -> None:
+        result = await asyncio.wait_for(
+            controller.send_miot_command(SIID_CHARGER, 5, timeout=_PORT_POLL_TIMEOUT),
+            timeout=_BACKGROUND_COMMAND_TIMEOUT,
+        )
+        if result is None or result.get("value") is None:
+            raise ConnectionError(f"BLE session unresponsive after {reason}")
+        self.state.update_setting(5, int(result["value"]))
+        self._last_payload = asyncio.get_running_loop().time()
 
     async def _probe_if_silent(self, controller: CuktechBLEController) -> None:
         """Probe a silent link without powering down HA's shared adapter."""
@@ -312,11 +426,7 @@ class CuktechBLERuntime:
         # An idle charger may legitimately stop pushing. Verify the encrypted
         # session before deciding it is stale; a GATT read alone cannot do this.
         if now - self._last_payload >= 180:
-            result = await controller.send_miot_command(SIID_CHARGER, 5, timeout=3)
-            if result is None or result.get("value") is None:
-                raise ConnectionError("BLE session unresponsive after three minutes of silence")
-            self.state.update_setting(5, int(result["value"]))
-            self._last_payload = now
+            await self._probe_miot_session(controller, "three minutes of silence")
             await self._emit_snapshot()
 
     def _on_disconnected(self, _client: BleakClient) -> None:

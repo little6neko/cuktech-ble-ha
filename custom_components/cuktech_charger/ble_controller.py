@@ -385,7 +385,7 @@ class CuktechBLEController:
         """Send one MiOT command."""
         if not self.authenticated:
             raise AuthenticationError("Not authenticated")
-        if value is not None:
+        if value is not None and piid != 16:
             await self.drain_command_notifications()
             sequence = self._miot_sequence
             self._miot_sequence = (sequence + 1) & 0xFF
@@ -401,29 +401,39 @@ class CuktechBLEController:
         sequence = self._miot_sequence
         self._miot_sequence = (sequence + 1) & 0xFF
         await self._send_encrypted(self._build_miot_tlv(sequence, siid, piid, value))
-        deadline = asyncio.get_running_loop().time() + timeout
+        # PIID 16 uses a short response window. Some gateway firmware only
+        # sends the transport ACK, so leave room for a read-back in that case.
+        deadline = asyncio.get_running_loop().time() + (
+            min(timeout, 1.0) if value is not None else timeout
+        )
         got_ack = False
         while (remaining := deadline - asyncio.get_running_loop().time()) > 0:
             plaintext = await self.receive_command_payload(min(remaining, 3.0))
             if plaintext is None or len(plaintext) < 9:
                 continue
             opcode = plaintext[4]
+            matches_property = (
+                plaintext[6] == siid and int.from_bytes(plaintext[7:9], "little") == piid
+            )
+            if value is not None and matches_property and plaintext[2] == sequence:
+                if opcode == 0x01:
+                    got_ack = True
+                    continue
+                if opcode == 0x04 and len(plaintext) >= 12:
+                    # Upstream observed nonzero GET-status bytes on successful
+                    # PIID 16 SET responses. They do not signal a SET rejection.
+                    echoed = parse_property_value(plaintext, check_status=False)
+                    return {"piid": piid, "value": echoed, "raw": plaintext}
             if opcode == 0x04 and self._push_callback is not None:
                 self._push_callback(plaintext)
-            response_siid = plaintext[6]
-            response_piid = int.from_bytes(plaintext[7:9], "little")
-            if response_siid != siid or response_piid != piid:
-                continue
-            if value is not None and opcode == 0x01:
-                got_ack = True
-                deadline = min(deadline, asyncio.get_running_loop().time() + 1.0)
-                continue
-            if opcode in (0x03, 0x04):
+            if value is None and matches_property and opcode in (0x03, 0x04):
                 if opcode == 0x03 and len(plaintext) >= 11 and (plaintext[9] or plaintext[10]):
                     return None
                 result_value = self._parse_result_value(plaintext)
                 return {"piid": piid, "value": result_value, "raw": plaintext}
-        return {"piid": piid, "value": None, "raw": None} if got_ack else None
+        if value is not None:
+            return {"piid": piid, "value": value, "raw": None, "transport_only": not got_ack}
+        return None
 
     @staticmethod
     def _parse_result_value(payload: bytes) -> int | None:

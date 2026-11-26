@@ -17,14 +17,14 @@ PORT_NAMES = {1: "c1", 2: "c2", 3: "c3", 4: "a"}
 PORT_BITS = {"c1": 0, "c2": 1, "c3": 2, "a": 3}
 
 
-def parse_property_value(payload: bytes) -> int | None:
+def parse_property_value(payload: bytes, *, check_status: bool = True) -> int | None:
     """Decode Result TLV or compact property push; reject malformed/error frames."""
     if len(payload) < 12 or payload[4] not in (0x03, 0x04):
         return None
     # GET Result: status[9:11], length[11], type[12], value[13:].
     size = payload[11]
     if size in (1, 2, 4) and len(payload) == 13 + size:
-        if payload[9] or payload[10]:
+        if check_status and (payload[9] or payload[10]):
             return None
         return int.from_bytes(payload[13:], "little")
     # Firmware pushes also use a compact header with the value at offset 12.

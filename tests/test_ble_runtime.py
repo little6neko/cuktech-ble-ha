@@ -133,14 +133,19 @@ async def test_set_command_completes_after_transport_ack_without_result():
     controller.drain_command_notifications = AsyncMock()
     controller._send_encrypted = AsyncMock()
 
-    result = await controller.send_miot_command(2, 16, 0x0E)
+    async def no_response(timeout):
+        await __import__("asyncio").sleep(timeout)
 
-    assert result == {"piid": 16, "value": 0x0E, "raw": None}
+    controller.receive_command_payload = AsyncMock(side_effect=no_response)
+    result = await controller.send_miot_command(2, 16, 0x0E, timeout=0.01)
+
+    assert result == {"piid": 16, "value": 0x0E, "raw": None, "transport_only": True}
+    controller.receive_command_payload.assert_awaited()
     controller._send_encrypted.assert_awaited_once_with(controller._build_miot_tlv(4, 2, 16, 0x0E))
 
 
 @pytest.mark.asyncio
-async def test_port_control_uses_cached_value_without_get(mock_hass):
+async def test_port_control_uses_cached_value_when_get_fails(mock_hass):
     runtime = CuktechBLERuntime(
         mock_hass,
         "AA:BB:CC:DD:EE:FF",
@@ -149,7 +154,7 @@ async def test_port_control_uses_cached_value_without_get(mock_hass):
     )
     client = MagicMock(is_connected=True)
     controller = MagicMock(client=client)
-    controller.send_miot_command = AsyncMock(return_value={"piid": 16, "value": 14})
+    controller.send_miot_command = AsyncMock(side_effect=[None, {"piid": 16, "value": 14}])
     controller.drain_command_notifications = AsyncMock()
     runtime._client = client
     runtime._controller = controller
@@ -160,7 +165,10 @@ async def test_port_control_uses_cached_value_without_get(mock_hass):
 
     assert await runtime.async_port_control("c1", "off") == 0x0E
 
-    controller.send_miot_command.assert_awaited_once_with(2, 16, 0x0E)
+    assert [request.args for request in controller.send_miot_command.await_args_list] == [
+        (2, 16),
+        (2, 16, 0x0E),
+    ]
     assert runtime.state.settings["16"] == 0x0E
 
 
